@@ -12,14 +12,14 @@ upstream RenoDX only supports Vulkan, so this project targets DX12.
 `renodx-rdr2dx12.addon64`, requires ReShade 6.8.0+ and the DX12 renderer.
 
 The decompiler patch this port needed lives in a GPL fork:
-[jakeypiez/3Dmigoto `sm51-decompiler-support`](https://github.com/jakeypiez/3Dmigoto/releases/tag/sm51-v1.0.0).
+[jakeypiez/3Dmigoto `sm51-decompiler-support`](https://github.com/jakeypiez/3Dmigoto/releases/tag/sm51-decompiler-support).
 It is kept separate from this MIT repository so the two licences never mix.
 
 ## Contents
 
 | Path | What it is |
 | --- | --- |
-| `src/games/rdr2dx12/` | The RenoDX add-on (drop into a RenoDX checkout to build) |
+| `src/games/rdr2dx12/` | The RenoDX add-on |
 | `src/games/rdr2dx12/shaders/` | DX12 shader replacements |
 | `tools/` | macOS-side toolchain for inspecting and decompiling DX12 shaders |
 | `scripts/` | macOS build and shader-embedding scripts |
@@ -32,7 +32,7 @@ It is kept separate from this MIT repository so the two licences never mix.
 | --- | --- |
 | macOS → Windows cross-build | **Verified** — produces a valid x64 `.addon64` |
 | DLL loads on Windows | **Verified** — `DllMain` executes |
-| HDR helper shaders (HLSL) | **Verified** — compile with real DXC |
+| HDR helper shaders | **Verified** — compile with real DXC |
 | DX12 shader identification | **Verified** — hashes confirmed against the capture |
 | Shader decompilation | **Verified** — all 19 candidates decompile to correct HLSL |
 | Tone-map pass replacement | **All 9 built and embedded** — bindings verified |
@@ -48,7 +48,7 @@ dcl_constantbuffer CB2[13:13][1], space=50   // RenoDXInjection
 
 `scripts/verify-shaders.sh` checks that mechanically: it compiles every replacement and runs
 `tools/verify-bindings.mjs`, which fails if a replacement does not read the same binding slots as
-the original. It keys on the slot in brackets (`T15[116]` is register 15, *binding* 116), because
+the original. It keys on the slot in brackets, so `T15[116]` means register 15 and **binding 116**:
 fxc renumbers register indices by declaration order and drops unused declarations, so comparing
 declaration text reports a wall of differences that do not matter.
 
@@ -80,7 +80,7 @@ git clone --depth 1 --recurse-submodules https://github.com/clshortfuse/renodx.g
 
 `build-macos.sh` first runs `scripts/embed-shaders-macos.sh`, which compiles every
 `shaders/<name>_0x<HASH>.<profile>.hlsl` to DXBC and generates the `<embed/shaders.h>` that
-`addon.cpp` includes (mirroring what RenoDX's CMake does on Windows).
+`addon.cpp` includes, mirroring what RenoDX's CMake does on Windows.
 
 Copy `build/out/renodx-rdr2dx12.addon64` next to `RDR2.exe` on Windows, with
 [ReShade](https://reshade.me/) 6.8.0 or newer installed, and select the DX12 renderer in game.
@@ -111,7 +111,7 @@ can be adapted to the others. In `0x20270B14` the stages are:
 | 1 | Exposure and optional alpha composite | `t110` → `t90`, `t44`, `t116`; `if CB0[16][64].x` |
 | 2 | Exposure curve and radial falloff | `CB0[16][73..75]`, `CB0[16][53..56]` |
 | 3 | Time-of-day colour curve | `CB0[16][57..60]`, driven by `v1.y` |
-| 4 | **Tone map** | `CB1[20][0..3]` (both branches evaluated, selected on `cb20[0].w`) |
+| 4 | **Tone map** | `CB1[20][0..3]`, both branches evaluated and selected on `cb20[0].w` |
 | 5 | Vignette gradient | `Texture1D t89`, `CB0[16][49..52]` |
 | 6 | LUT input encoding | `CB1[20][2..3]` |
 | 7 | BT.2020 lift and look mask | literals `0.5149/0.3244/0.1607…`, `CB0[16][83..84]` |
@@ -151,8 +151,7 @@ Also generated, by `tools/output-port.mjs`. Unlike the tone-map passes, these do
 common body — each variant has its own input stage — so only the shared tail is patched:
 
 1. `GammaSafe()` on the linear colour, before the BT.2020 conversion. All ten of the Vulkan mod's
-   output shaders do this; it is identity unless SDR EOTF emulation is on. (The hand-written first
-   version of `0x1096351C` omitted it, which is one reason it has been replaced by a generated one.)
+   output shaders do this; it is identity unless SDR EOTF emulation is on.
 2. `PQEncodeUI()` in place of the game's brightness scaling and PQ curve when a RenoDX tone mapper
    is active, so the encoder tracks `RENODX_GRAPHICS_WHITE_NITS`.
 
@@ -201,7 +200,7 @@ git apply /path/to/tools/decompiler-patch/sm51-support.patch
 cmd_Decompiler.exe -D shader.ps_5_1.cso
 ```
 
-The patch is GPL-licensed (as is 3DMigoto) and is kept separate from this MIT-licensed port.
+The patch is GPL-licensed, as is 3DMigoto, and is kept separate from this MIT-licensed port.
 It is also published as a branch on
 [a fork of 3DMigoto](https://github.com/jakeypiez/3Dmigoto/tree/sm51-decompiler-support).
 
@@ -217,15 +216,18 @@ your own capture, which you can produce with a debug build of ReShade/RenoDX:
 
 ## Remaining work
 
-1. Replace the nine tone-map shaders (see the hash table above), applying the helpers in
-   `src/games/rdr2dx12/` at the equivalent operations.
-2. Reproduce each shader's exact interface — DX12 constant-buffer layouts differ from Vulkan's.
-3. Verify the injection fits the root signature (the `b13, space50` binding in `shared.h` is
-   still unvalidated against a real root signature) and test in game.
+1. **Run it in game.** Everything so far is compile-time and binary-level verification; the mod has
+   never been executed. A capture of a real session would also confirm which passes the game
+   actually uses at each setting.
+2. **Verify the injection fits the root signature.** The `b13, space50` binding in `shared.h` is
+   unvalidated against a real root signature. If it does not fit, ReShade creates no cloned pipeline
+   layout and the replacements silently do nothing.
+3. **Check the visual result.** The tone-mapping maths is the game's own in Vanilla mode, but
+   whether the RenoDX paths produce correct HDR has not been seen on screen.
 
 ## Credits and licensing
 
-MIT. Portions copyright Musa Haji (RenoDX `rdr2vk`) and Carlos Lopez Jr. (RenoDX framework).
+MIT. Portions copyright Musa Haji for RenoDX `rdr2vk` and Carlos Lopez Jr. for the RenoDX framework.
 The decompiler patch under `tools/decompiler-patch/` applies to GPL-licensed 3DMigoto and is
 distributed under the same terms.
 
