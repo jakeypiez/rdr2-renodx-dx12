@@ -4,17 +4,18 @@ An unofficial DX12 port of [Musa Haji's Vulkan HDR mod](https://github.com/clsho
 for [RenoDX](https://github.com/clshortfuse/renodx). RDR2 ships both a Vulkan and a DX12 renderer;
 upstream RenoDX only supports Vulkan, so this project targets DX12.
 
-> **Status: work in progress.** The add-on builds, loads, and identifies the correct DX12 shaders,
-> but **no shader replacement is registered yet, so HDR output is currently unchanged.** See
-> [Status](#status) for exactly what is and is not verified.
+> **Status: work in progress.** The add-on builds, loads, replaces the HDR output pass, and
+> identifies the correct DX12 shaders — but the **tone-map passes are not yet replaced**, and
+> nothing has been tested in game. See [Status](#status) for exactly what is verified.
 
 ## Contents
 
 | Path | What it is |
 | --- | --- |
 | `src/games/rdr2dx12/` | The RenoDX add-on (drop into a RenoDX checkout to build) |
+| `src/games/rdr2dx12/shaders/` | DX12 shader replacements |
 | `tools/` | macOS-side toolchain for inspecting and decompiling DX12 shaders |
-| `scripts/build-macos.sh` | Cross-builds the `.addon64` on macOS |
+| `scripts/` | macOS build and shader-embedding scripts |
 | `docs/` | Method notes and workflow documentation |
 | `tools/decompiler-patch/` | Patch adding SM5.1 support to 3DMigoto's decompiler |
 
@@ -27,8 +28,19 @@ upstream RenoDX only supports Vulkan, so this project targets DX12.
 | HDR helper shaders (HLSL) | **Verified** — compile with real DXC |
 | DX12 shader identification | **Verified** — hashes confirmed against the capture |
 | Shader decompilation | **Verified** — all 19 candidates decompile to correct HLSL |
-| Shader replacements registered | **Not done** |
-| In-game HDR result | **Not tested** |
+| HDR output pass replacement | **Built and embedded** — bindings verified against the original |
+| Tone-map pass replacement | **Not done** |
+| In-game result | **Not tested** |
+
+The replaced output pass (`0x1096351C`) preserves every original resource binding and adds the
+RenoDX injection constant buffer at `cb13, space50`:
+
+```
+dcl_constantbuffer CB2[13:13][1], space=50   // RenoDXInjection
+```
+
+**This has not been run in the game.** It compiles, embeds, and loads; whether the HDR path
+behaves correctly on screen is unknown.
 
 ## Building
 
@@ -42,6 +54,10 @@ git clone --depth 1 --recurse-submodules https://github.com/clshortfuse/renodx.g
 
 ./scripts/build-macos.sh            # -> build/out/renodx-rdr2dx12.addon64
 ```
+
+`build-macos.sh` first runs `scripts/embed-shaders-macos.sh`, which compiles every
+`shaders/<name>_0x<HASH>.<profile>.hlsl` to DXBC and generates the `<embed/shaders.h>` that
+`addon.cpp` includes (mirroring what RenoDX's CMake does on Windows).
 
 Copy `build/out/renodx-rdr2dx12.addon64` next to `RDR2.exe` on Windows, with
 [ReShade](https://reshade.me/) 6.8.0 or newer installed, and select the DX12 renderer in game.
@@ -102,12 +118,11 @@ your own capture, which you can produce with a debug build of ReShade/RenoDX:
 
 ## Remaining work
 
-1. Reconstruct the tone-map and output shaders, applying the helpers in `src/games/rdr2dx12/`.
+1. Replace the nine tone-map shaders (see the hash table above), applying the helpers in
+   `src/games/rdr2dx12/` at the equivalent operations.
 2. Reproduce each shader's exact interface — DX12 constant-buffer layouts differ from Vulkan's.
-3. Add them as `<name>_0x<HASH>.ps_5_1.hlsl`, wire up shader embedding, and register the hashes
-   in `addon.cpp`.
-4. Verify the injection fits the root signature (the `b13, space50` binding in `shared.h` is
-   still unvalidated) and test in game.
+3. Verify the injection fits the root signature (the `b13, space50` binding in `shared.h` is
+   still unvalidated against a real root signature) and test in game.
 
 ## Credits and licensing
 

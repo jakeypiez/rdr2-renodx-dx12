@@ -5,7 +5,7 @@
   "variant": "DX12",
   "compatibility": "in-progress",
   "maintainers": [],
-  "summary": "Unofficial inactive DX12 port scaffold; contains no verified game shader replacements and does not currently modify HDR output.",
+  "summary": "Unofficial DX12 port adding configurable HDR tone mapping and color grading to Red Dead Redemption 2's DirectX 12 renderer. Work in progress.",
   "tags": [
     "HDR",
     "DX12"
@@ -13,7 +13,8 @@
   "status": "experimental",
   "notes": [
     "Requires the DirectX 12 graphics API and HDR enabled in game.",
-    "Shader hashes are DX12-specific and must be discovered with a debug build; see README."
+    "Work in progress: the HDR output pass is replaced, the tone-map passes are not. Untested in game.",
+    "Shader hashes are DX12-specific and unrelated to the Vulkan mod's."
   ],
   "deploy": {
     "game_exe": "RDR2.exe",

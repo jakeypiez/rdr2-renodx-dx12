@@ -28,8 +28,85 @@ struct ID3DBlobVtbl {
 typedef HRESULT(WINAPI* D3DCompileFn)(LPCVOID, SIZE_T, LPCSTR, const void*, void*,
                                       LPCSTR, LPCSTR, UINT, UINT, ID3DBlob**, ID3DBlob**);
 
+/* Minimal ID3DInclude declaration (d3dcompiler.h is not used here so this host
+   stays self-contained for the MinGW cross-build). Layout matches the SDK. */
+typedef enum D3D_INCLUDE_TYPE { D3D_INCLUDE_LOCAL = 0, D3D_INCLUDE_SYSTEM = 1 } D3D_INCLUDE_TYPE;
+typedef struct ID3DInclude ID3DInclude;
+/* Must mirror DECLARE_INTERFACE: IUnknown's three methods come first, then Open
+   and Close. Omitting them misaligns the vtable and crashes the compiler. */
+struct ID3DInclude {
+  HRESULT(STDMETHODCALLTYPE* QueryInterface)(ID3DInclude*, const void*, void**);
+  ULONG(STDMETHODCALLTYPE* AddRef)(ID3DInclude*);
+  ULONG(STDMETHODCALLTYPE* Release)(ID3DInclude*);
+  HRESULT(STDMETHODCALLTYPE* Open)(ID3DInclude*, D3D_INCLUDE_TYPE, LPCSTR, LPCVOID, LPCVOID*, UINT*);
+  HRESULT(STDMETHODCALLTYPE* Close)(ID3DInclude*, LPCVOID);
+};
+
+static HRESULT STDMETHODCALLTYPE IncludeQueryInterface(ID3DInclude* this_ptr, const void* riid, void** out) {
+  (void)this_ptr; (void)riid; (void)out; return E_NOINTERFACE;
+}
+static ULONG STDMETHODCALLTYPE IncludeAddRef(ID3DInclude* this_ptr) { (void)this_ptr; return 1; }
+static ULONG STDMETHODCALLTYPE IncludeRelease(ID3DInclude* this_ptr) { (void)this_ptr; return 1; }
+
 #define D3DCOMPILE_ENABLE_STRICTNESS 0x00000800
 #define D3DCOMPILE_OPTIMIZATION_LEVEL3 0x00008000
+
+/* Resolve #include relative to the including file's directory. */
+static HRESULT STDMETHODCALLTYPE IncludeOpen(ID3DInclude* this_ptr, D3D_INCLUDE_TYPE type,
+                                             LPCSTR filename, LPCVOID parent_data,
+                                             LPCVOID* data, UINT* bytes) {
+  char path[MAX_PATH];
+  char parent[MAX_PATH];
+  FILE* fp;
+  long size;
+
+  (void)this_ptr; (void)type;
+
+  if (parent_data != NULL) {
+    strncpy(parent, (const char*)parent_data, sizeof(parent) - 1);
+    parent[sizeof(parent) - 1] = '\0';
+    {
+      char* slash = strrchr(parent, '\\');
+      char* fslash = strrchr(parent, '/');
+      if (fslash > slash) slash = fslash;
+      if (slash != NULL) slash[1] = '\0'; else parent[0] = '\0';
+    }
+  } else {
+    parent[0] = '\0';
+  }
+
+  snprintf(path, sizeof(path), "%s%s", parent, filename);
+
+  fp = fopen(path, "rb");
+  if (fp == NULL) return E_FAIL;
+  fseek(fp, 0, SEEK_END);
+  size = ftell(fp);
+  fseek(fp, 0, SEEK_SET);
+  if (size <= 0) { fclose(fp); return E_FAIL; }
+
+  {
+    char* buffer = (char*)malloc((size_t)size);
+    if (buffer == NULL) { fclose(fp); return E_OUTOFMEMORY; }
+    if (fread(buffer, 1, (size_t)size, fp) != (size_t)size) {
+      fclose(fp); free(buffer); return E_FAIL;
+    }
+    fclose(fp);
+    *data = buffer;
+    *bytes = (UINT)size;
+  }
+  return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE IncludeClose(ID3DInclude* this_ptr, LPCVOID data) {
+  (void)this_ptr;
+  free((void*)data);
+  return S_OK;
+}
+
+static ID3DInclude include_handler = {
+    IncludeQueryInterface, IncludeAddRef, IncludeRelease,
+    IncludeOpen, IncludeClose
+};
 
 static unsigned char* read_file(const char* path, SIZE_T* size) {
   FILE* fp = fopen(path, "rb");
@@ -67,7 +144,7 @@ int main(int argc, char** argv) {
 
   ID3DBlob* code = NULL;
   ID3DBlob* errors = NULL;
-  HRESULT hr = compile(source, size, argv[1], NULL, NULL, entry, target,
+  HRESULT hr = compile(source, size, argv[1], NULL, &include_handler, entry, target,
                        D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
                        0, &code, &errors);
 

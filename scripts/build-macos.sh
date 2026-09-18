@@ -49,6 +49,10 @@ SYNC_DIR="$RENODX_SRC/src/games/$ADDON"
 mkdir -p "$SYNC_DIR"
 rsync -a --delete "$HERE/src/games/$ADDON/" "$SYNC_DIR/"
 
+# Shader replacements must be compiled and embedded first; addon.cpp includes
+# <embed/shaders.h>, which scripts/embed-shaders-macos.sh generates.
+"$HERE/scripts/embed-shaders-macos.sh"
+
 echo "==> compiling addon.cpp"
 "$CLANG_CL" \
   --target=x86_64-pc-windows-msvc \
@@ -68,6 +72,7 @@ echo "==> compiling addon.cpp"
   -I "$RENODX_SRC/external/json/include" \
   -I "$RENODX_SRC/external/frozen/include" \
   -I "$RENODX_SRC/src" \
+  -I "$HERE/build" \
   -- "$SYNC_DIR/addon.cpp"
 
 echo "==> linking renodx-$ADDON.addon64"
