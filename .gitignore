@@ -1,0 +1,23 @@
+# Large binaries and game-derived content are deliberately not committed.
+
+# Game-derived content (copyright Rockstar Games) - reproduce locally instead.
+captures/
+decompiled/
+reference/
+*.cso
+*.zip
+
+# Build outputs
+build/
+*.obj
+*.exe
+*.addon64
+
+# Downloaded toolchain binaries (see README for how to obtain them)
+tools/dxcompiler.dll
+tools/dxil.dll
+tools/d3dcompiler_47.dll
+tools/decomp-mac
+
+# macOS
+.DS_Store

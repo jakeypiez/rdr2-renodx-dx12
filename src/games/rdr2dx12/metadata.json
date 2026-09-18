@@ -1,0 +1,28 @@
+{
+  "$schema": "https://cdn.jsdelivr.net/gh/clshortfuse/renodx/renodx-metadata-schema.json",
+  "id": "rdr2dx12",
+  "title": "Red Dead Redemption 2",
+  "variant": "DX12",
+  "compatibility": "in-progress",
+  "maintainers": [],
+  "summary": "Unofficial inactive DX12 port scaffold; contains no verified game shader replacements and does not currently modify HDR output.",
+  "tags": [
+    "HDR",
+    "DX12"
+  ],
+  "status": "experimental",
+  "notes": [
+    "Requires the DirectX 12 graphics API and HDR enabled in game.",
+    "Shader hashes are DX12-specific and must be discovered with a debug build; see README."
+  ],
+  "deploy": {
+    "game_exe": "RDR2.exe",
+    "process_name": "RDR2.exe",
+    "api": "dx12",
+    "steam_appid": 1174180,
+    "architecture": [
+      "x64"
+    ],
+    "platform": "steam"
+  }
+}

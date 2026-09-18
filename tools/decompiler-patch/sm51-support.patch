@@ -1,0 +1,150 @@
+diff --git a/HLSLDecompiler/DecompileHLSL.cpp b/HLSLDecompiler/DecompileHLSL.cpp
+index c21bbae..b28b1e1 100644
+--- a/HLSLDecompiler/DecompileHLSL.cpp
++++ b/HLSLDecompiler/DecompileHLSL.cpp
+@@ -2510,6 +2510,8 @@ public:
+ 			else if (!strncmp(textype, "Texture3D<", strlen("Texture3D<"))) pos = 4;
+ 			else if (!strncmp(textype, "TextureCube<", strlen("TextureCube<"))) pos = 4;
+ 			else if (!strncmp(textype, "TextureCubeArray<", strlen("TextureCubeArray<"))) pos = 5;	// float4 .xyzw
++			else if (!strncmp(textype, "StructuredBuffer<", strlen("StructuredBuffer<"))) pos = 5;	// float val[N]
++			else if (!strncmp(textype, "RWStructuredBuffer<", strlen("RWStructuredBuffer<"))) pos = 5;
+ 			else logDecompileError("  unknown texture type for truncation: " + string(textype));
+ 			cpos = strrchr(op, '.');
+ 			cpos[pos] = 0;
+@@ -2536,6 +2538,8 @@ public:
+ 		else if (!strncmp(textype, "Texture2DMSArray<", strlen("Texture2DMSArray<"))) pos = 4;
+ 		else if (!strncmp(textype, "Texture2DArray<", strlen("Texture2DArray<"))) pos = 5;	// int4 .xyzw
+ 		else if (!strncmp(textype, "Texture3D<", strlen("Texture3D<"))) pos = 5;
++		else if (!strncmp(textype, "StructuredBuffer<", strlen("StructuredBuffer<"))) pos = 5;
++		else if (!strncmp(textype, "RWStructuredBuffer<", strlen("RWStructuredBuffer<"))) pos = 5;
+ 		else logDecompileError("  unknown texture type for truncation: " + string(textype));
+ 		char *cpos = strrchr(op, '.');
+ 		cpos[pos] = 0;
+@@ -4241,6 +4245,13 @@ public:
+ 					mOutput.insert(mOutput.begin(), buffer, buffer + strlen(buffer));
+ 					mCodeStartPos += strlen(buffer);
+ 
++					// Record the manufactured type so later operand truncation knows what
++					// this register holds. Without this mTextureType stays empty and the
++					// truncation helpers fail with "unknown texture type for truncation".
++					sprintf(buffer, "%sStructuredBuffer<%c%d_t>", uav ? "RW" : "", prefix, bufIndex);
++					mTextureType[bufIndex] = buffer;
++					mTextureNames[bufIndex] = string(1, prefix) + to_string(bufIndex);
++
+ 					if (bufStride % 4) {
+ 						// I don't think this is ordinarily possible since almost all data types are 32bits
+ 						// (or a pair of 2x32bit fields in the case of a double). Half types and minimum
+diff --git a/HLSLDecompiler/cmd_Decompiler/cmd_Decompiler.cpp b/HLSLDecompiler/cmd_Decompiler/cmd_Decompiler.cpp
+index 2e6df43..815201c 100644
+--- a/HLSLDecompiler/cmd_Decompiler/cmd_Decompiler.cpp
++++ b/HLSLDecompiler/cmd_Decompiler/cmd_Decompiler.cpp
+@@ -202,6 +202,100 @@ void parse_args(int argc, char *argv[])
+ 
+ }
+ 
++// Shader model 5.1 splits each binding into (descriptor index, register) and adds
++// a shader-visible `space`. This decompiler predates SM5.1 and only understands
++// the single-level SM5.0 form, so it cannot parse:
++//   dcl_constantbuffer CB0[22:22][11], immediateIndexed, space=0
++//   dcl_sampler S0[2:2], mode_default, space=0
++//   dcl_resource_texture2d (...) T1[32:32], space=0
++//   CB0[22][8]
++// Rewrite the descriptor index into the register slot, which stays unique because
++// descriptor indices are unique within each resource class, and drop `space=N`:
++//   CB0[22][8] -> cb22[8]    T1[32] -> t32    S1[5] -> s5
++// This is a pure rename; no instruction semantics change.
++static string NormalizeShaderModel51Line(const string &line)
++{
++	// Fast path: nothing SM5.1-specific on this line.
++	if (line.find("space=") == string::npos &&
++	    line.find("][") == string::npos &&
++	    !regex_search(line, regex(R"(\b[TSU]\d+\[\d+)")))
++		return line;
++
++	string s = line;
++
++	// Declaration: keep the resource type text, replace only the bind target.
++	// dcl_constantbuffer CB0[22:22][11], immediateIndexed, space=0 -> cb22[11]
++	{
++		static const regex re(R"(^(.*?dcl_constantbuffer\s+)CB(\d+)\[(\d+)(?::\d+)?\]\[(\d+)\](.*)$)", regex::icase);
++		smatch m;
++		if (regex_match(s, m, re)) {
++			// groups: 1=prefix 2=descriptorIndex 3=registerStart 4=count 5=rest
++			s = m[1].str() + "cb" + m[3].str() + "[" + m[4].str() + "]" + m[5].str();
++		}
++	}
++	// dcl_resource_texture2d (float,...) T1[32:32], space=0 -> ... t32
++	// dcl_resource_structured T0[0:0], 92, space=0        -> ... t0, 92
++	// dcl_sampler S0[2:2], mode_default, space=0          -> dcl_sampler s2, mode_default
++	{
++		static const regex re(R"(^(.*?dcl_(resource_\w+|sampler)\s+)((?:\([^)]*\)\s+)?)[TSU](\d+)\[(\d+)(?::\d+)?\](.*)$)", regex::icase);
++		smatch m;
++		if (regex_match(s, m, re)) {
++			// groups: 1=prefix 2=kind 3=type 4=descriptorIndex 5=register 6=rest
++			// Resources use 't', samplers use 's'; the disassembly letter is upper case
++			// but the decompiler expects lower-case HLSL register names.
++			const string kind = m[2].str();
++			const char regLetter = (kind == "sampler") ? 's' : 't';
++			s = m[1].str() + m[3].str() + regLetter + m[5].str() + m[6].str();
++		}
++	}
++
++	// Operand forms: CB0[22][8] -> cb22[8]; then T1[32]/S1[5]/U1[5] -> t32/s5/u5.
++	// Note the replacement must force lower case: the disassembly uses upper-case
++	// class letters (T/S/U/CB), while the decompiler expects the lower-case HLSL
++	// register names. std::regex_replace cannot change case, so do it manually.
++	s = regex_replace(s, regex(R"(CB(\d+)\[(\d+)(?::\d+)?\]\[(\d+)\])", regex::icase), "cb$2[$3]");
++	{
++		static const regex re(R"(\b([TSU])(\d+)\[(\d+)\])", regex::icase);
++		string lower;
++		size_t last = 0;
++		for (sregex_iterator it(s.begin(), s.end(), re), end; it != end; ++it) {
++			const smatch &m = *it;
++			lower += s.substr(last, m.position() - last);
++			lower += static_cast<char>(tolower(m[1].str()[0]));
++			lower += m[3].str();
++			last = m.position() + m.length();
++		}
++		lower += s.substr(last);
++		s = lower;
++	}
++
++	// Spaces have no SM5.0 equivalent.
++	s = regex_replace(s, regex(R"(,\s*space=\d+)", regex::icase), "");
++
++	return s;
++}
++
++static void NormalizeShaderModel51(string *asmText)
++{
++	// Only touch SM5.1+ text; SM5.0 has neither `space=` nor two-level indices.
++	if (asmText->find("space=") == string::npos &&
++	    asmText->find("][") == string::npos)
++		return;
++
++	string out;
++	out.reserve(asmText->size());
++	size_t start = 0;
++	while (start <= asmText->size()) {
++		size_t nl = asmText->find('\n', start);
++		string line = asmText->substr(start, (nl == string::npos ? asmText->size() : nl) - start);
++		out += NormalizeShaderModel51Line(line);
++		if (nl == string::npos) break;
++		out += '\n';
++		start = nl + 1;
++	}
++	*asmText = out;
++}
++
+ // Old version directly using D3DDisassemble, suffers from precision issues due
+ // to bug in MS's disassembler that always prints floats with %f, which does
+ // not have sufficient precision to reproduce a 32bit floating point value
+@@ -223,6 +317,8 @@ static HRESULT DisassembleMS(const void *pShaderBytecode, size_t BytecodeLength,
+ 	// the null bytes otherwise cause Git diffs to fail.
+ 	*asmText = string(static_cast<char*>(disassembly->GetBufferPointer()));
+ 
++	NormalizeShaderModel51(asmText);
++
+ 	disassembly->Release();
+ 	return S_OK;
+ }
