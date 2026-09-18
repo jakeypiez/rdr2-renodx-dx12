@@ -8,6 +8,13 @@ upstream RenoDX only supports Vulkan, so this project targets DX12.
 > capture — the 9 tone-map passes and the 10 output/PQ-encode variants — but **nothing has been
 > tested in game**. See [Status](#status) for exactly what is verified.
 
+**[Download the latest build](https://github.com/jakeypiez/rdr2-renodx-dx12/releases/latest)** —
+`renodx-rdr2dx12.addon64`, requires ReShade 6.8.0+ and the DX12 renderer.
+
+The decompiler patch this port needed lives in a GPL fork:
+[jakeypiez/3Dmigoto `sm51-decompiler-support`](https://github.com/jakeypiez/3Dmigoto/releases/tag/sm51-v1.0.0).
+It is kept separate from this MIT repository so the two licences never mix.
+
 ## Contents
 
 | Path | What it is |
