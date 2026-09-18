@@ -4,9 +4,9 @@ An unofficial DX12 port of [Musa Haji's Vulkan HDR mod](https://github.com/clsho
 for [RenoDX](https://github.com/clshortfuse/renodx). RDR2 ships both a Vulkan and a DX12 renderer;
 upstream RenoDX only supports Vulkan, so this project targets DX12.
 
-> **Status: work in progress.** The add-on builds, loads, and replaces the HDR output pass and all
-> nine tone-map passes — but **nothing has been tested in game**. See [Status](#status) for exactly
-> what is verified.
+> **Status: work in progress.** The add-on builds, loads, and replaces all 19 shaders in the
+> capture — the 9 tone-map passes and the 10 output/PQ-encode variants — but **nothing has been
+> tested in game**. See [Status](#status) for exactly what is verified.
 
 ## Contents
 
@@ -28,11 +28,11 @@ upstream RenoDX only supports Vulkan, so this project targets DX12.
 | HDR helper shaders (HLSL) | **Verified** — compile with real DXC |
 | DX12 shader identification | **Verified** — hashes confirmed against the capture |
 | Shader decompilation | **Verified** — all 19 candidates decompile to correct HLSL |
-| HDR output pass replacement | **Built and embedded** — bindings verified against the original |
 | Tone-map pass replacement | **All 9 built and embedded** — bindings verified |
+| Output/PQ-encode replacement | **All 10 variants built and embedded** — bindings verified |
 | In-game result | **Not tested** |
 
-All 10 replaced shaders preserve every original resource binding and add the RenoDX injection
+All 19 replaced shaders preserve every original resource binding and add the RenoDX injection
 constant buffer at `cb13, space50`:
 
 ```
@@ -47,9 +47,9 @@ declaration text reports a wall of differences that do not matter.
 
 ```
 ok    0x1096351C  ok: 9 binding slots used identically
-ok    0x1D1EEAC6  ok: 32 binding slots used identically
+ok    0x157288EC  ok: 10 binding slots used identically
 ...
-10 passed, 0 failed
+19 passed, 0 failed
 ```
 
 **This has not been run in the game.** It compiles, embeds, and loads; whether it behaves
@@ -84,10 +84,15 @@ RenoDX identifies shaders by the CRC32 of the original bytecode. DX12 bytecode d
 Vulkan's, so every hash in the Vulkan mod is meaningless here. The DX12 equivalents were
 identified by disassembling the captures and matching structural fingerprints:
 
-| Role | DX12 hash | Evidence |
+| Role | DX12 hashes | Evidence |
 | --- | --- | --- |
-| HDR output / PQ encode | `0x1096351C` | `SV_Position`+`TEXCOORD0.xy`; samples `t32`, `mad` with `cb22[7..8]`; `if cb22[9].y` gates BT.709→BT.2020 (`0.627404, 0.329282, 0.043314`); PQ encode via `cb23[0].x / cb23[3].w`; vignette `cos`; `saturate` |
 | Tone map + LUT | `0x1D1EEAC6`, `0x20270B14`, `0x4FF4CC58`, `0x6F990851`, `0x8704771A`, `0x9CCF855F`, `0xBF7C33C4`, `0xF039556F`, `0xFC787CD2` | Contain the LUT atlas offsets (`0.001953125`, `0.03125`) and dithering `Texture2DArray` lookup |
+| Output / PQ encode | `0x1096351C`, `0x157288EC`, `0x1A0D957F`, `0x20C410CB`, `0x2E866023`, `0x307A8225`, `0x737584AF`, `0x9DF4FCED`, `0xCA8E18BF`, `0xEE341D7A` | All read `cb22[9].y` to gate BT.709→BT.2020 (`0.627404, 0.329282, 0.043314`) and write the PQ curve; all declare the stride-92 `t0` calibration buffer |
+
+The output pass exists in many input variants: some sample a colour texture, some take the colour
+from an interpolator, some multiply by a second texture's alpha, one discards below an alpha
+threshold, one applies a colour-space LUT first. Only their shared encoder tail is patched; each
+variant's own input stage is left exactly as it was.
 
 ### Tone-map pass structure
 
@@ -133,6 +138,29 @@ The decompiler has two reproducible gaps in this pass, both repaired and documen
 generator: it cannot represent `dcl_resource_texture1d`, and it emits the instruction sampling that
 texture as two mangled lines built from a phantom variable.
 
+### How the output passes are ported
+
+Also generated, by `tools/output-port.mjs`. Unlike the tone-map passes, these do **not** share a
+common body — each variant has its own input stage — so only the shared tail is patched:
+
+1. `GammaSafe()` on the linear colour, before the BT.2020 conversion. All ten of the Vulkan mod's
+   output shaders do this; it is identity unless SDR EOTF emulation is on. (The hand-written first
+   version of `0x1096351C` omitted it, which is one reason it has been replaced by a generated one.)
+2. `PQEncodeUI()` in place of the game's brightness scaling and PQ curve when a RenoDX tone mapper
+   is active, so the encoder tracks `RENODX_GRAPHICS_WHITE_NITS`.
+
+The guard is placed immediately after the BT.2020 dots, before the game's own scaling. That
+position matters: the game scales the converted colour **in place**, so a guard placed later would
+hand `PQEncodeUI` an already-scaled colour while it does its own nits scaling.
+
+Two things made this harder than the tone maps. The variants do not agree on where the encoder
+ends — some wrap it in `if (cb22[9].y != 0) { ... }` so it ends at a closing brace, others run it
+unguarded at function level so it ends at the next `if` — and the engine writes the encoded result
+back over the *linear* register, so the register names are not interchangeable. The generator finds
+the region end by indent and `if` structure rather than by brace matching, and resolves all three
+registers explicitly (`linear`, `converted`, `encoded`). It refuses to run if it cannot identify
+them, rather than emitting a pass that silently encodes the wrong colour.
+
 ## Tooling
 
 All tools run on macOS; the Windows components run under CrossOver/Wine.
@@ -149,6 +177,7 @@ All tools run on macOS; the Windows components run under CrossOver/Wine.
 | `tools/hlsl-compile.exe` | HLSL → DXBC SM5.x via `D3DCompile` |
 | `tools/loadtest.exe` | Confirm a `.addon64` loads and its entry point runs |
 | `tools/mech-port.mjs` | Turn a decompiled tone-map pass into a RenoDX replacement |
+| `tools/output-port.mjs` | Turn a decompiled output/PQ-encode pass into a replacement |
 | `tools/verify-bindings.mjs` | Fail if a replacement reads different binding slots |
 | `scripts/verify-shaders.sh` | Compile and binding-check every replacement at once |
 

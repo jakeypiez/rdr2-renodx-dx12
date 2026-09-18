@@ -55,23 +55,43 @@ constexpr uint32_t TONEMAP_SHADERS[] = {
     0xFC787CD2,
 };
 
-// A tone-map hash that is listed but not embedded would leave that pass
-// unmodified, and the game would tone map some frames and not others. That is
-// hard to spot on screen, so it is reported rather than skipped: an earlier
-// version of scripts/embed-shaders-macos.sh registered only the last shader and
-// the failure was silent.
+// The output/PQ-encode pass exists in many input variants (different
+// interpolators, some sampling a colour texture, some applying a colour-space
+// LUT, one discarding below an alpha threshold). They all share the encoder
+// tail, so every variant present in the capture is replaced; leaving one out
+// would leave part of the frame untone-mapped.
+constexpr uint32_t OUTPUT_SHADERS[] = {
+    0x1096351C,
+    0x157288EC,
+    0x1A0D957F,
+    0x20C410CB,
+    0x2E866023,
+    0x307A8225,
+    0x737584AF,
+    0x9DF4FCED,
+    0xCA8E18BF,
+    0xEE341D7A,
+};
+
+// A shader that is listed but not embedded would leave that pass unmodified, and
+// the game would tone map some frames and not others. That is hard to spot on
+// screen, so it is reported rather than skipped: an earlier version of
+// scripts/embed-shaders-macos.sh registered only the last shader and the failure
+// was silent.
 renodx::mods::shader::CustomShaders custom_shaders = [] {
   renodx::mods::shader::CustomShaders shaders = {
       __ALL_CUSTOM_SHADERS,
   };
-  constexpr size_t expected = 1 /* HDR output pass */ + std::size(TONEMAP_SHADERS);
+  const std::span<const uint32_t> tone_map_shaders = TONEMAP_SHADERS;
+  const std::span<const uint32_t> output_shaders = OUTPUT_SHADERS;
+  const size_t expected = tone_map_shaders.size() + output_shaders.size();
   if (shaders.size() != expected) {
     std::stringstream s;
     s << "RenoDX RDR2 (DX12): expected " << expected << " embedded shaders but found "
       << shaders.size() << "; some passes will not be replaced";
     reshade::log::message(reshade::log::level::error, s.str().c_str());
   }
-  for (const uint32_t crc32 : TONEMAP_SHADERS) {
+  for (const uint32_t crc32 : tone_map_shaders) {
     const auto entry = shaders.find(crc32);
     if (entry == shaders.end()) {
       std::stringstream s;
@@ -381,7 +401,8 @@ renodx::utils::settings::Settings settings = {
     new renodx::utils::settings::Setting{
         .value_type = renodx::utils::settings::SettingValueType::TEXT,
         .label = std::string("- Unofficial, work-in-progress DX12 port for Red Dead Redemption 2.\n"
-                             "- The HDR output pass and all nine tone-map passes are replaced.\n"
+                             "- All 19 shaders in the capture are replaced: the 9 tone-map passes\n"
+                             "  and the 10 output/PQ-encode variants.\n"
                              "- Restart the game after changing settings; untested in game.\n"
                              "- Derived from Musa Haji's Vulkan addon; Musa does not maintain this fork."),
         .section = "About",
@@ -426,7 +447,7 @@ BOOL APIENTRY DllMain(HMODULE h_module, DWORD fdw_reason, LPVOID lpv_reserved) {
 
       reshade::log::message(
           reshade::log::level::info,
-          "RenoDX RDR2 (DX12, unofficial WIP): attached; 10 shader replacements registered.");
+          "RenoDX RDR2 (DX12, unofficial WIP): attached; 19 shader replacements registered.");
 
       if (!initialized) {
         // Gate pipeline-layout initialization to DX12. These are experimental
