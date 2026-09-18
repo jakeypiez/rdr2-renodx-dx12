@@ -4,9 +4,9 @@ An unofficial DX12 port of [Musa Haji's Vulkan HDR mod](https://github.com/clsho
 for [RenoDX](https://github.com/clshortfuse/renodx). RDR2 ships both a Vulkan and a DX12 renderer;
 upstream RenoDX only supports Vulkan, so this project targets DX12.
 
-> **Status: work in progress.** The add-on builds, loads, replaces the HDR output pass and one of
-> the nine tone-map passes — but **eight tone-map passes are not yet replaced**, and nothing has
-> been tested in game. See [Status](#status) for exactly what is verified.
+> **Status: work in progress.** The add-on builds, loads, and replaces the HDR output pass and all
+> nine tone-map passes — but **nothing has been tested in game**. See [Status](#status) for exactly
+> what is verified.
 
 ## Contents
 
@@ -29,24 +29,34 @@ upstream RenoDX only supports Vulkan, so this project targets DX12.
 | DX12 shader identification | **Verified** — hashes confirmed against the capture |
 | Shader decompilation | **Verified** — all 19 candidates decompile to correct HLSL |
 | HDR output pass replacement | **Built and embedded** — bindings verified against the original |
-| Tone-map pass replacement | **1 of 9 built and embedded** (`0x20270B14`) |
+| Tone-map pass replacement | **All 9 built and embedded** — bindings verified |
 | In-game result | **Not tested** |
 
-Both replaced shaders preserve every original resource binding and add the RenoDX injection
+All 10 replaced shaders preserve every original resource binding and add the RenoDX injection
 constant buffer at `cb13, space50`:
 
 ```
 dcl_constantbuffer CB2[13:13][1], space=50   // RenoDXInjection
 ```
 
-`tools/verify-bindings.mjs` checks the second half of that claim mechanically: it parses the
-original and replacement disassemblies and fails if the two do not read the same binding slots.
-It keys on the slot in brackets (`T15[116]` is register 15, *binding* 116), because fxc renumbers
-the register indices by declaration order and drops unused declarations, so comparing declaration
-text reports a wall of differences that do not matter.
+`scripts/verify-shaders.sh` checks that mechanically: it compiles every replacement and runs
+`tools/verify-bindings.mjs`, which fails if a replacement does not read the same binding slots as
+the original. It keys on the slot in brackets (`T15[116]` is register 15, *binding* 116), because
+fxc renumbers register indices by declaration order and drops unused declarations, so comparing
+declaration text reports a wall of differences that do not matter.
 
-**This has not been run in the game.** It compiles, embeds, and loads; whether the HDR path
-behaves correctly on screen is unknown.
+```
+ok    0x1096351C  ok: 9 binding slots used identically
+ok    0x1D1EEAC6  ok: 32 binding slots used identically
+...
+10 passed, 0 failed
+```
+
+**This has not been run in the game.** It compiles, embeds, and loads; whether it behaves
+correctly on screen is unknown. The single biggest unverified assumption is the injection binding:
+if a real RDR2 root signature does not expose `b13, space50`, ReShade will not create the cloned
+pipeline layout and the replacements simply will not take effect — you would see the stock game
+rather than a broken image.
 
 ## Building
 
@@ -101,6 +111,28 @@ can be adapted to the others. In `0x20270B14` the stages are:
 
 Stages 1–8 are the input-varying part that distinguishes the nine passes; stages 9–12 are shared.
 
+### How the tone-map passes are ported
+
+The nine passes were **not** hand-written. `tools/mech-port.mjs` generates each one from the
+3DMigoto decompilation of the game's own bytecode, so the arithmetic, register bindings and
+structured-buffer strides are the game's rather than a re-derivation — hand-retyping a decompilation
+only adds chances to introduce errors.
+
+Inspection showed the post-tone-map tail is **instruction-identical across all nine passes** modulo
+register numbering and swizzle lanes, and the tone-map algorithm itself is shared, differing only in
+which register it uses and in the final select's swizzle (`r1.xyz = ...` in some passes,
+`r0.yzw = ...` in others, where the pass leaves x alone). So the generator locates the block's two
+boundaries — the `cb20[1].x ? cb20[2].z` contrast override and the closing `cb20[0].w` select — and
+wraps the unchanged original in an `else`, putting `ApplyToneMap()` on the RenoDX path.
+
+That structure is what makes `ToneMapper = Vanilla` exact: the vanilla branch is the game's own
+arithmetic, untouched. The generator fails loudly if either boundary or the coefficient loads cannot
+be found, rather than silently emitting a pass that skips the RenoDX tone mapper.
+
+The decompiler has two reproducible gaps in this pass, both repaired and documented in the
+generator: it cannot represent `dcl_resource_texture1d`, and it emits the instruction sampling that
+texture as two mangled lines built from a phantom variable.
+
 ## Tooling
 
 All tools run on macOS; the Windows components run under CrossOver/Wine.
@@ -116,6 +148,9 @@ All tools run on macOS; the Windows components run under CrossOver/Wine.
 | `tools/inspect-dxbc.mjs` | CRC32 + constant-fingerprint inventory of a dump |
 | `tools/hlsl-compile.exe` | HLSL → DXBC SM5.x via `D3DCompile` |
 | `tools/loadtest.exe` | Confirm a `.addon64` loads and its entry point runs |
+| `tools/mech-port.mjs` | Turn a decompiled tone-map pass into a RenoDX replacement |
+| `tools/verify-bindings.mjs` | Fail if a replacement reads different binding slots |
+| `scripts/verify-shaders.sh` | Compile and binding-check every replacement at once |
 
 ### Decompiling SM5.1 shaders
 
