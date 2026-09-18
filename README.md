@@ -12,7 +12,7 @@ upstream RenoDX only supports Vulkan, so this project targets DX12.
 `renodx-rdr2dx12.addon64`, requires ReShade 6.8.0+ and the DX12 renderer.
 
 The decompiler patch this port needed lives in a GPL fork:
-[jakeypiez/3Dmigoto `sm51-decompiler-support`](https://github.com/jakeypiez/3Dmigoto/releases/tag/sm51-decompiler-support).
+[jakeypiez/3Dmigoto `sm51-support`](https://github.com/jakeypiez/3Dmigoto/releases/tag/sm51-support).
 It is kept separate from this MIT repository so the two licences never mix.
 
 ## Contents
