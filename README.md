@@ -4,9 +4,9 @@ An unofficial DX12 port of [Musa Haji's Vulkan HDR mod](https://github.com/clsho
 for [RenoDX](https://github.com/clshortfuse/renodx). RDR2 ships both a Vulkan and a DX12 renderer;
 upstream RenoDX only supports Vulkan, so this project targets DX12.
 
-> **Status: work in progress.** The add-on builds, loads, replaces the HDR output pass, and
-> identifies the correct DX12 shaders — but the **tone-map passes are not yet replaced**, and
-> nothing has been tested in game. See [Status](#status) for exactly what is verified.
+> **Status: work in progress.** The add-on builds, loads, replaces the HDR output pass and one of
+> the nine tone-map passes — but **eight tone-map passes are not yet replaced**, and nothing has
+> been tested in game. See [Status](#status) for exactly what is verified.
 
 ## Contents
 
@@ -29,15 +29,21 @@ upstream RenoDX only supports Vulkan, so this project targets DX12.
 | DX12 shader identification | **Verified** — hashes confirmed against the capture |
 | Shader decompilation | **Verified** — all 19 candidates decompile to correct HLSL |
 | HDR output pass replacement | **Built and embedded** — bindings verified against the original |
-| Tone-map pass replacement | **Not done** |
+| Tone-map pass replacement | **1 of 9 built and embedded** (`0x20270B14`) |
 | In-game result | **Not tested** |
 
-The replaced output pass (`0x1096351C`) preserves every original resource binding and adds the
-RenoDX injection constant buffer at `cb13, space50`:
+Both replaced shaders preserve every original resource binding and add the RenoDX injection
+constant buffer at `cb13, space50`:
 
 ```
 dcl_constantbuffer CB2[13:13][1], space=50   // RenoDXInjection
 ```
+
+`tools/verify-bindings.mjs` checks the second half of that claim mechanically: it parses the
+original and replacement disassemblies and fails if the two do not read the same binding slots.
+It keys on the slot in brackets (`T15[116]` is register 15, *binding* 116), because fxc renumbers
+the register indices by declaration order and drops unused declarations, so comparing declaration
+text reports a wall of differences that do not matter.
 
 **This has not been run in the game.** It compiles, embeds, and loads; whether the HDR path
 behaves correctly on screen is unknown.
@@ -72,6 +78,28 @@ identified by disassembling the captures and matching structural fingerprints:
 | --- | --- | --- |
 | HDR output / PQ encode | `0x1096351C` | `SV_Position`+`TEXCOORD0.xy`; samples `t32`, `mad` with `cb22[7..8]`; `if cb22[9].y` gates BT.709→BT.2020 (`0.627404, 0.329282, 0.043314`); PQ encode via `cb23[0].x / cb23[3].w`; vignette `cos`; `saturate` |
 | Tone map + LUT | `0x1D1EEAC6`, `0x20270B14`, `0x4FF4CC58`, `0x6F990851`, `0x8704771A`, `0x9CCF855F`, `0xBF7C33C4`, `0xF039556F`, `0xFC787CD2` | Contain the LUT atlas offsets (`0.001953125`, `0.03125`) and dithering `Texture2DArray` lookup |
+
+### Tone-map pass structure
+
+All nine tone-map passes end with the same post-processing tail, which is why one reconstruction
+can be adapted to the others. In `0x20270B14` the stages are:
+
+| # | Stage | Bytecode evidence |
+| --- | --- | --- |
+| 1 | Exposure and optional alpha composite | `t110` → `t90`, `t44`, `t116`; `if CB0[16][64].x` |
+| 2 | Exposure curve and radial falloff | `CB0[16][73..75]`, `CB0[16][53..56]` |
+| 3 | Time-of-day colour curve | `CB0[16][57..60]`, driven by `v1.y` |
+| 4 | **Tone map** | `CB1[20][0..3]` (both branches evaluated, selected on `cb20[0].w`) |
+| 5 | Vignette gradient | `Texture1D t89`, `CB0[16][49..52]` |
+| 6 | LUT input encoding | `CB1[20][2..3]` |
+| 7 | BT.2020 lift and look mask | literals `0.5149/0.3244/0.1607…`, `CB0[16][83..84]` |
+| 8 | Aberration sample | `t111`, `CB0[16][86..87]` |
+| 9 | LUT atlas lookups, look presets, decode | `t106/t100/t101` atlas, `t107` attribution, `t78` depth, `t118` presets |
+| 10 | Luma and display curve | `CB0[16][39..42]` |
+| 11 | Dither | `Texture2DArray t25` + `t3` |
+| 12 | RenoDX grading | added, mirrors the Vulkan mod |
+
+Stages 1–8 are the input-varying part that distinguishes the nine passes; stages 9–12 are shared.
 
 ## Tooling
 

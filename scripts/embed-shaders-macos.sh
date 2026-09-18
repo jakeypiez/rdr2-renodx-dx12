@@ -21,6 +21,7 @@ cx() { perl -e 'alarm 300; exec @ARGV' "$CX" --bottle "$BOTTLE" --no-gui --dll d
 
 echo "==> scanning $SRC for shader replacements"
 shaders_h=$'#pragma once\n'
+entries=()
 found=0
 
 # Find <name>_0x<HASH>.<profile>.hlsl
@@ -67,12 +68,29 @@ while IFS= read -r file; do
   ' "$cso" "$header"
 
   shaders_h+="#include \"./$hash.h\""$'\n'
-  shaders_h+="#define __CUSTOM_SHADER_ENTRIES \\"$'\n'
-  shaders_h+="  CustomShaderEntry($hash)"$'\n'
-  shaders_h+="#define __ALL_CUSTOM_SHADERS \\"$'\n'
-  shaders_h+="  __CUSTOM_SHADER_ENTRIES"$'\n'
+  entries+=("  CustomShaderEntry($hash)")
   found=$((found + 1))
 done < <(find "$SRC" -name "*.hlsl" | sort)
+
+# Emit one entry list, not one macro per shader. __ALL_CUSTOM_SHADERS is
+# expanded at its point of use, so a per-shader `#define
+# __CUSTOM_SHADER_ENTRIES` would leave only the final definition visible and
+# silently register just the last shader.
+#
+# Entries are comma-separated (the macro expands into a braced initialiser
+# list) and each line but the last ends with a line continuation; a trailing
+# backslash on the final entry would splice the following #define onto it.
+shaders_h+=$'\n'$'#define __CUSTOM_SHADER_ENTRIES \\\n'
+last=$((found - 1))
+for ((i = 0; i < found; i++)); do
+  if [ "$i" -lt "$last" ]; then
+    shaders_h+="${entries[$i]}, \\"$'\n'
+  else
+    shaders_h+="${entries[$i]}"$'\n'
+  fi
+done
+shaders_h+=$'\n'$'#define __ALL_CUSTOM_SHADERS \\\n'
+shaders_h+="  __CUSTOM_SHADER_ENTRIES"$'\n'
 
 printf '%s' "$shaders_h" > "$EMBED/shaders.h"
 echo "==> $found shader(s); wrote $EMBED/shaders.h"

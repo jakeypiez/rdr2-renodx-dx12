@@ -34,12 +34,31 @@ void OnTonemapShaderDrawn(reshade::api::command_list*) {
 // were verified against a capture of this game's DX12 renderer; they are
 // unrelated to the Vulkan mod's hashes.
 //
-// 0x1096351C is the HDR output / PQ encode pass (shaders/0x1096351C.ps_5_1.hlsl).
+// Tone-map passes must announce themselves through the on_drawn callback, which
+// is what sets the is_tonemapped flag that the grading helper checks; OnPresent
+// clears it once per frame. Registering a tone-map replacement without that
+// callback would leave the flag unset, and the grading pass would then run a
+// second time on a colour that has already been graded.
+//
+// 0x1096351C is the HDR output / PQ encode pass.
+// 0x20270B14 is the first of the nine tone-map passes to be ported.
 // __ALL_CUSTOM_SHADERS expands the entries generated from the hash-named shader
 // files by scripts/embed-shaders-macos.sh.
-renodx::mods::shader::CustomShaders custom_shaders = {
-    __ALL_CUSTOM_SHADERS,
+constexpr uint32_t TONEMAP_SHADERS[] = {
+    0x20270B14,
 };
+
+renodx::mods::shader::CustomShaders custom_shaders = [] {
+  renodx::mods::shader::CustomShaders shaders = {
+      __ALL_CUSTOM_SHADERS,
+  };
+  for (const uint32_t crc32 : TONEMAP_SHADERS) {
+    const auto entry = shaders.find(crc32);
+    if (entry == shaders.end()) continue;
+    entry->second.on_drawn = &OnTonemapShaderDrawn;
+  }
+  return shaders;
+}();
 
 void OnPresent(
     reshade::api::command_queue*,
@@ -337,7 +356,8 @@ renodx::utils::settings::Settings settings = {
     new renodx::utils::settings::Setting{
         .value_type = renodx::utils::settings::SettingValueType::TEXT,
         .label = std::string("- Unofficial, work-in-progress DX12 port for Red Dead Redemption 2.\n"
-                             "- The HDR output pass is replaced; the tone-map passes are not yet.\n"
+                             "- The HDR output pass and one tone-map pass are replaced; the\n"
+                             "  other eight tone-map passes are not yet.\n"
                              "- Restart the game after changing settings; untested in game.\n"
                              "- Derived from Musa Haji's Vulkan addon; Musa does not maintain this fork."),
         .section = "About",
@@ -382,7 +402,7 @@ BOOL APIENTRY DllMain(HMODULE h_module, DWORD fdw_reason, LPVOID lpv_reserved) {
 
       reshade::log::message(
           reshade::log::level::info,
-          "RenoDX RDR2 (DX12, unofficial WIP): attached; 1 shader replacement registered.");
+          "RenoDX RDR2 (DX12, unofficial WIP): attached; 2 shader replacements registered.");
 
       if (!initialized) {
         // Gate pipeline-layout initialization to DX12. These are experimental
